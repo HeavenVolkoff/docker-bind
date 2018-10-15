@@ -164,10 +164,21 @@ add_options() {
 	local config_file="${1}"
 	local dnssec_validate="${2}"
 	local forwarders="${3}"
+	local clients="${4}"
 
 	{
+		echo "acl clients {"
+		if [ -n "${clients}" ]; then
+			printf "${clients}"
+		fi
+		echo "    localhost;"
+		echo "    localnets;"
+		echo "};"
+		echo
 		echo "options {"
 		echo "    directory \"/var/cache/bind\";"
+		echo "    recursion yes;"
+		echo "    allow-query { clients; };"
 		echo "    dnssec-validation ${dnssec_validate};"
 		echo "    auth-nxdomain no;    # conform to RFC1035"
 		echo "    listen-on-v6 { any; };"
@@ -467,7 +478,6 @@ fi
 ### Add wildcard DNS
 ###
 if printenv WILDCARD_DNS >/dev/null 2>&1; then
-
 	# Convert 'com=1.2.3.4[=com],de=2.3.4.5' into newline separated string:
 	#  com=1.2.3.4[=com]
 	#  de=2.3.4.5
@@ -520,7 +530,6 @@ fi
 ### Add extra hosts
 ###
 if printenv EXTRA_HOSTS >/dev/null 2>&1 && [ -n "$( printenv EXTRA_HOSTS )" ]; then
-
 	# Convert 'com=1.2.3.4[=com],de=2.3.4.5' into newline separated string:
 	#  com=1.2.3.4
 	#  de=2.3.4.5
@@ -596,16 +605,9 @@ log "info" "DNSSEC Validation: ${DNSSEC_VALIDATE}" "${DEBUG_ENTRYPOINT}"
 ###
 ### Forwarder
 ###
-if ! printenv DNS_FORWARDER >/dev/null 2>&1; then
-	log "info" "\$DNS_FORWARDER not set." "${DEBUG_ENTRYPOINT}"
-	log "info" "No custom DNS server will be used as forwarder" "${DEBUG_ENTRYPOINT}"
-
-	add_options "${NAMED_OPT_CONF}" "${DNSSEC_VALIDATE}" ""
-else
-
-	# To be pupulated
-	_forwarders_block=""
-
+# To be pupulated
+_forwarders_block=""
+if printenv DNS_FORWARDER >/dev/null 2>&1; then
 	# Transform into newline separated forwards and loop over:
 	#   x.x.x.x\n
 	#   y.y.y.y\n
@@ -622,8 +624,7 @@ else
 		else
 			_forwarders_block="${_forwarders_block}\n        ${ip};"
 		fi
-	done <<< "$(echo "$( printenv DNS_FORWARDER )" | sed 's/,/\n/g' )"
-
+	done <<< "$(echo "$( printenv DNS_FORWARDER )" | tr -d '\n' | sed 's/,/\n/g' )"
 
 	if [ -z "${_forwarders_block}" ]; then
 		log "err" "DNS_FORWARDER error: variable specified, but no IP addresses found." "${DEBUG_ENTRYPOINT}"
@@ -631,10 +632,41 @@ else
 	fi
 
 	log "info" "Adding custom DNS forwarder: ${DNS_FORWARDER}" "${DEBUG_ENTRYPOINT}"
-	add_options "${NAMED_OPT_CONF}" "${DNSSEC_VALIDATE}" "${_forwarders_block}"
+else
+	log "info" "\$DNS_FORWARDER not set." "${DEBUG_ENTRYPOINT}"
+	log "info" "No custom DNS server will be used as forwarder" "${DEBUG_ENTRYPOINT}"
 fi
 
+### Clients
+###
+# To be pupulated
+_client_block=""
+if printenv DNS_CLIENTS >/dev/null 2>&1; then
+	# Transform into newline separated client and loop over:
+	#   x.x.x.x\n
+	#   y.y.y.y\n
+	while read client ; do
+		client="$( echo "${client}" | xargs )"
 
+		if [ -z "${_client_block}" ]; then
+			_client_block="    ${client};"
+		else
+			_client_block="${_client_block}\n    ${client};"
+		fi
+
+		log "info" "Adding client: ${client}" "${DEBUG_ENTRYPOINT}"
+	done <<< "$(echo "$( printenv DNS_CLIENTS )" | tr -d '\n' | sed 's/,/\n/g' )"
+
+	if [ -z "${_client_block}" ]; then
+		log "err" "DNS_CLIENTS error: variable specified, but no addresses found." "${DEBUG_ENTRYPOINT}"
+		exit 1
+	fi
+else
+         log "info" "\$DNS_CLIENT not set." "${DEBUG_ENTRYPOINT}"
+         log "info" "Access to DNS will be restricted to localhost" "${DEBUG_ENTRYPOINT}"
+fi
+
+add_options "${NAMED_OPT_CONF}" "${DNSSEC_VALIDATE}" "${_forwarders_block}" "${_client_block}"
 
 ###
 ### Start
